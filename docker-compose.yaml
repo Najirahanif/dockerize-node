@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+  # Backend - Can access both networks
+  dockerize-node:
+    build: .
+    container_name: dockerize-node-backend
+    ports:
+      - "9090:3000"
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./config:/app/config:ro
+      - ./uploads:/app/uploads
+      - cache-data:/app/cache
+      - /app/temp
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - APP_NAME=dockerize-node
+      - MONGO_URI=mongodb://admin:admin123@mongo:27017/dockerize-node?authSource=admin
+    depends_on:
+      - mongo
+    restart: unless-stopped
+    networks:
+      - frontend-network    # For frontend to access
+      - backend-network     # For database access
+
+  # Frontend - ONLY on frontend network (CANNOT reach database!)
+  frontend:
+    build: ./frontend
+    container_name: dockerize-node-frontend
+    ports:
+      - "8081:80"
+    depends_on:
+      - dockerize-node
+    networks:
+      - frontend-network     # ONLY this network
+    restart: unless-stopped
+
+  # MongoDB - ONLY on backend network (hidden from frontend!)
+  mongo:
+    image: mongo:7
+    container_name: dockerize-node-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=admin123
+      - MONGO_INITDB_DATABASE=dockerize-node
+    restart: unless-stopped
+    networks:
+      - backend-network      # ONLY backend can access
+    # NO ports exposed to host! (Remove or comment out ports)
+
+  # Mongo Express - On backend network only (admin only)
+  mongo-express:
+    image: mongo-express:latest
+    container_name: dockerize-node-mongo-express
+    ports:
+      - "8082:8081"
+    environment:
+      - ME_CONFIG_MONGODB_ADMINUSERNAME=admin
+      - ME_CONFIG_MONGODB_ADMINPASSWORD=admin123
+      - ME_CONFIG_MONGODB_URL=mongodb://admin:admin123@mongo:27017/
+      - ME_CONFIG_BASICAUTH_USERNAME=admin
+      - ME_CONFIG_BASICAUTH_PASSWORD=admin123
+    depends_on:
+      - mongo
+    networks:
+      - backend-network
+    restart: unless-stopped
+
+volumes:
+  db-data:
+  cache-data:
+  backup-data:
+  mongo-data:
+
+# TWO SEPARATE NETWORKS for isolation!
+networks:
+  frontend-network:
+    driver: bridge
+    name: frontend-network    # Frontend + Backend only
+  
+  backend-network:
+    driver: bridge
+    name: backend-network     # Backend + Database only
