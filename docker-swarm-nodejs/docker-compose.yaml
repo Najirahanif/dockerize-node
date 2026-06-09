@@ -1,0 +1,91 @@
+services:
+  # API Gateway - Entry point to your microservices
+  api-gateway:
+    build: ./services/ApiGateway
+    image: swarm-demo/gateway:latest
+    deploy:
+      replicas: 2
+      update_config:
+        parallelism: 1         # Update one at a time
+        delay: 10s            # Wait 10s between updates
+      restart_policy:
+        condition: any        # Always restart if fails
+        max_attempts: 3       # Try 3 times before giving up
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    environment:
+      - NODE_ENV=production
+    networks:
+      - swarm-network
+    ports:
+      - "8080:3000"
+
+  # User Service - Manages users
+  user-service:
+    build: ./services/Users
+    image: swarm-demo/user:latest
+    deploy:
+      replicas: 3
+      update_config:
+        parallelism: 2
+        delay: 5s
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          cpus: '0.3'
+          memory: 128M
+    environment:
+      - NODE_ENV=production
+      - SERVICE_NAME=user-service
+    networks:
+      - swarm-network
+
+  # Product Service - Manages products
+  product-service:
+    build: ./services/Products
+    image: swarm-demo/product:latest
+    deploy:
+      replicas: 3
+      update_config:
+        parallelism: 2
+        delay: 5s
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          cpus: '0.3'
+          memory: 128M
+    environment:
+      - NODE_ENV=production
+      - SERVICE_NAME=product-service
+    networks:
+      - swarm-network
+
+  # Redis - With persistent storage using named volume
+  redis:
+    image: redis:7-alpine
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: any
+    volumes:
+      - redis-data:/data  # Named volume for persistence
+    command: redis-server --appendonly yes  # Enable persistence
+    networks:
+      - swarm-network
+
+networks:
+  swarm-network:
+    driver: overlay
+    attachable: true
+
+# Named volumes section
+volumes:
+  redis-data:
+    driver: local  # Default driver, stores data locally
