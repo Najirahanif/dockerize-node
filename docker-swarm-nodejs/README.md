@@ -221,3 +221,115 @@ service update paused: update paused due to failure or early termination of task
 exit (137)  generally means 1. Out-Of-Memory (OOM) Killer, 2. Graceful Shutdown Timeout (SIGTERM Escalation)
 
 
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+Rollback if the new one is slow
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+📝 Complete Steps
+Step 1: Build new version (v3)
+# Build v3 image
+docker build -t swarm-demo/gateway:v3 ./services/ApiGateway
+
+# Verify it exists
+docker images | grep gateway
+Step 2: Update to v3
+bash
+# Update service to use v3
+docker service update --image swarm-demo/gateway:v3 demo_api-gateway
+
+# Check update status
+docker service ps demo_api-gateway
+Step 3: Test new version
+bash
+# Verify it's working
+curl http://localhost:8080/health
+
+# Check logs
+docker service logs demo_api-gateway --tail 20
+Step 4: Rollback (if needed)
+bash
+# Rollback to previous version (v2 or latest)
+docker service rollback demo_api-gateway
+
+# Verify rollback worked
+docker service ps demo_api-gateway
+
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+DB Locking in redis 
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+# Redis Distributed Lock for Preventing Race Conditions
+
+A simple implementation of Redis-based distributed locking to prevent concurrent purchase conflicts.
+
+## 🔒 What is a Distributed Lock?
+
+**Problem:** When multiple users buy the same product at the same time, stock can be oversold.
+
+**Solution:** Redis lock ensures only ONE purchase happens at a time.
+
+## 📊 How It Works
+Without Lock (BAD):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+User A: Reads stock (10 items)
+User B: Reads stock (10 items)
+User A: Updates stock to 9
+User B: Updates stock to 9 ❌ WRONG! (Should be 8)
+Result: Stock is 9 (sold 1 item but 2 people bought!) ❌
+
+With Lock (GOOD):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+User A: Acquires LOCK 🔒
+User B: Tries lock → FAILS (waits)
+User A: Reads stock (10) → Updates to 9 → Releases LOCK
+User B: Acquires LOCK → Reads stock (9) → Updates to 8
+Result: Stock is 8 (sold 2 items correctly!) ✅
+
+text
+
+## 🚀 Quick Test Commands
+
+### Prerequisites
+```bash
+# Ensure product service is running
+docker stack services demo | grep product
+1. Check Initial Stock
+bash
+curl http://localhost:8080/products/1/stock
+Expected output:
+
+json
+{
+  "product": "Laptop",
+  "stock": 10,
+  "container": "abc123"
+}
+2. Single Purchase (Works Fine)
+bash
+curl -X POST http://localhost:8080/products/1/buy \
+  -H "Content-Type: application/json" \
+  -d '{"quantity":1}'
+Expected output:
+
+json
+{
+  "success": true,
+  "message": "Purchased 1 x Laptop",
+  "remainingStock": 9
+}
+3. Concurrent Purchase Test (Lock in Action)
+Run 3 purchases at the SAME time:
+
+bash
+# This runs 3 purchases simultaneously
+for i in {1..3}; do
+    curl -X POST http://localhost:8080/products/1/buy \
+      -H "Content-Type: application/json" \
+      -d '{"quantity":1}' &
+done
+wait
+Expected output (ONLY 1 succeeds, 2 fail):
+
+text
+{"error":"Product is being purchased. Try again."}
+{"error":"Product is being purchased. Try again."}
+{"success":true,"message":"Purchased 1 x Laptop","remainingStock":8}
+
