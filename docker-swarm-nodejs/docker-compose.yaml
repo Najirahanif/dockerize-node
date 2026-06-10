@@ -14,11 +14,22 @@ services:
       resources:
         limits:
           cpus: '0.5'
+          memory: 512M  
+        reservations:
           memory: 256M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    secrets:
+      - api_key
+      - jwt_secret
     environment:
       - NODE_ENV=production
     networks:
-      - swarm-network
+      - my-swarm-network
     ports:
       - "8080:3000"
 
@@ -28,6 +39,12 @@ services:
     image: swarm-demo/user:latest
     deploy:
       replicas: 3
+      labels:
+        - autoscale=true
+        - autoscale.min=2
+        - autoscale.max=6
+        - autoscale.up=8
+        - autoscale.down=2
       update_config:
         parallelism: 2
         delay: 5s
@@ -37,11 +54,17 @@ services:
         limits:
           cpus: '0.3'
           memory: 128M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     environment:
       - NODE_ENV=production
       - SERVICE_NAME=user-service
     networks:
-      - swarm-network
+      - my-swarm-network
 
   # Product Service - Manages products
   product-service:
@@ -49,6 +72,12 @@ services:
     image: swarm-demo/product:latest
     deploy:
       replicas: 3
+      labels:
+        - autoscale=true
+        - autoscale.min=1
+        - autoscale.max=8
+        - autoscale.up=5
+        - autoscale.down=2
       update_config:
         parallelism: 2
         delay: 5s
@@ -58,11 +87,17 @@ services:
         limits:
           cpus: '0.3'
           memory: 128M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     environment:
       - NODE_ENV=production
       - SERVICE_NAME=product-service
     networks:
-      - swarm-network
+      - my-swarm-network
 
   # Redis - With persistent storage using named volume
   redis:
@@ -75,17 +110,106 @@ services:
       restart_policy:
         condition: any
     volumes:
-      - redis-data:/data  # Named volume for persistence
-    command: redis-server --appendonly yes  # Enable persistence
+      - redis-data:/data
+    command: redis-server --appendonly yes
     networks:
-      - swarm-network
+      - my-swarm-network
 
+  autoscaler:
+    image: alpine:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - my-swarm-network
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache docker-cli bc
+        
+        # Get my own container ID and stack name
+        MY_CONTAINER=$$(hostname)
+        STACK_NAME=$$(docker inspect $$MY_CONTAINER --format '{{index .Config.Labels "com.docker.stack.namespace"}}')
+        
+        echo "=== AUTOSCALER STARTED ==="
+        echo "Stack: $$STACK_NAME"
+        echo "Monitoring ALL services with autoscale=true label"
+        echo "=========================="
+        
+        while true; do
+          # Find ALL services with autoscale=true in this stack
+          for TARGET_SERVICE in $$(docker service ls --filter label=autoscale=true --format '{{.Name}}' | grep "^$${STACK_NAME}_"); do
+            
+            # Get thresholds from service labels
+            MIN=$$(docker service inspect $$TARGET_SERVICE --format '{{index .Spec.Labels "autoscale.min"}}' 2>/dev/null)
+            MAX=$$(docker service inspect $$TARGET_SERVICE --format '{{index .Spec.Labels "autoscale.max"}}' 2>/dev/null)
+            UP=$$(docker service inspect $$TARGET_SERVICE --format '{{index .Spec.Labels "autoscale.up"}}' 2>/dev/null)
+            DOWN=$$(docker service inspect $$TARGET_SERVICE --format '{{index .Spec.Labels "autoscale.down"}}' 2>/dev/null)
+            
+            [ -z "$$MIN" ] && MIN=1
+            [ -z "$$MAX" ] && MAX=8
+            [ -z "$$UP" ] && UP=5
+            [ -z "$$DOWN" ] && DOWN=2
+            
+            # Get CPU for this service (average across all containers)
+            TOTAL_CPU=0
+            COUNT=0
+            for CONTAINER in $$(docker ps -q --filter name=$$TARGET_SERVICE); do
+              if [ -n "$$CONTAINER" ]; then
+                CPU_VAL=$$(docker stats --no-stream --format "{{.CPUPerc}}" $$CONTAINER 2>/dev/null | sed 's/%//')
+                if [ -n "$$CPU_VAL" ]; then
+                  TOTAL_CPU=$$(echo "$$TOTAL_CPU + $$CPU_VAL" | bc 2>/dev/null)
+                  COUNT=$$((COUNT + 1))
+                fi
+              fi
+            done
+            
+            if [ $$COUNT -gt 0 ]; then
+              AVG_CPU=$$(echo "scale=2; $$TOTAL_CPU / $$COUNT" | bc 2>/dev/null)
+            else
+              AVG_CPU=0
+            fi
+            
+            REPLICAS=$$(docker service inspect $$TARGET_SERVICE --format '{{.Spec.Mode.Replicated.Replicas}}' 2>/dev/null)
+            [ -z "$$REPLICAS" ] && REPLICAS=$$MIN
+            
+            echo "$$(date '+%H:%M:%S') - $$TARGET_SERVICE: CPU=$${AVG_CPU}% | REPLICAS=$$REPLICAS"
+            
+            HIGH=$$(echo "$$AVG_CPU > $$UP" | bc 2>/dev/null)
+            LOW=$$(echo "$$AVG_CPU < $$DOWN" | bc 2>/dev/null)
+            
+            if [ "$$HIGH" = "1" ] && [ $$REPLICAS -lt $$MAX ]; then
+              NEW=$$((REPLICAS + 1))
+              echo ">>> SCALING UP $$TARGET_SERVICE: $$REPLICAS -> $$NEW (CPU: $${AVG_CPU}%)"
+              docker service scale $$TARGET_SERVICE=$$NEW
+              sleep 120
+            fi
+            
+            if [ "$$LOW" = "1" ] && [ $$REPLICAS -gt $$MIN ]; then
+              NEW=$$((REPLICAS - 1))
+              echo "<<< SCALING DOWN $$TARGET_SERVICE: $$REPLICAS -> $$NEW (CPU: $${AVG_CPU}%)"
+              docker service scale $$TARGET_SERVICE=$$NEW
+              sleep 120
+            fi
+          done
+          
+          sleep 30
+        done
 networks:
-  swarm-network:
+  my-swarm-network:
     driver: overlay
     attachable: true
 
 # Named volumes section
 volumes:
   redis-data:
-    driver: local  # Default driver, stores data locally
+
+secrets:
+  api_key:
+    external: true
+  jwt_secret:
+    external: true

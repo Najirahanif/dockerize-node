@@ -8,7 +8,7 @@ const containerId = os.hostname().substring(0, 8);
 
 // Connect to Redis
 const redisClient = redis.createClient({
-    url: 'redis://redis:6379'
+    url: 'redis://demo_redis:6379'
 });
 
 redisClient.on('error', (err) => console.error('Redis Error:', err));

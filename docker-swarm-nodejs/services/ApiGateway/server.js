@@ -1,7 +1,7 @@
 const express = require('express');
 const axios = require('axios');
 const os = require('os');
-
+const fs = require('fs');
 const app = express();
 const PORT = 3000;
 const containerId = os.hostname().substring(0, 8);
@@ -11,11 +11,11 @@ app.use(express.json());
 
 // Home route
 app.get('/', (req, res) => {
-    res.json({ 
-        service: 'API Gateway', 
+    res.json({
+        service: 'API Gateway',
         version: VERSION,
-        container: containerId, 
-        message: 'Welcome to Docker Swarm - UPDATED VERSION!' 
+        container: containerId,
+        message: 'Welcome to Docker Swarm - UPDATED VERSION!'
     });
 });
 
@@ -23,11 +23,11 @@ app.get('/', (req, res) => {
 app.get('/users', async (req, res) => {
     try {
         const response = await axios.get('http://user-service:3001/users');
-        res.json({ 
+        res.json({
             version: VERSION,
-            from: 'API Gateway', 
-            gateway_container: containerId, 
-            data: response.data 
+            from: 'API Gateway',
+            gateway_container: containerId,
+            data: response.data
         });
     } catch (error) {
         res.status(500).json({ error: 'User service unavailable' });
@@ -38,11 +38,11 @@ app.get('/users', async (req, res) => {
 app.get('/products', async (req, res) => {
     try {
         const response = await axios.get('http://product-service:3002/products');
-        res.json({ 
+        res.json({
             version: VERSION,
-            from: 'API Gateway', 
-            gateway_container: containerId, 
-            data: response.data 
+            from: 'API Gateway',
+            gateway_container: containerId,
+            data: response.data
         });
     } catch (error) {
         res.status(500).json({ error: 'Product service unavailable' });
@@ -53,10 +53,10 @@ app.get('/products', async (req, res) => {
 app.get('/products/:id', async (req, res) => {
     try {
         const response = await axios.get(`http://product-service:3002/products/${req.params.id}`);
-        res.json({ 
-            from: 'API Gateway', 
-            gateway_container: containerId, 
-            data: response.data 
+        res.json({
+            from: 'API Gateway',
+            gateway_container: containerId,
+            data: response.data
         });
     } catch (error) {
         res.status(500).json({ error: 'Product service unavailable' });
@@ -67,10 +67,10 @@ app.get('/products/:id', async (req, res) => {
 app.get('/products/:id/stock', async (req, res) => {
     try {
         const response = await axios.get(`http://product-service:3002/products/${req.params.id}/stock`);
-        res.json({ 
-            from: 'API Gateway', 
-            gateway_container: containerId, 
-            data: response.data 
+        res.json({
+            from: 'API Gateway',
+            gateway_container: containerId,
+            data: response.data
         });
     } catch (error) {
         res.status(500).json({ error: 'Product service unavailable' });
@@ -84,26 +84,43 @@ app.post('/products/:id/buy', async (req, res) => {
             `http://product-service:3002/products/${req.params.id}/buy`,
             req.body
         );
-        res.json({ 
-            from: 'API Gateway', 
-            gateway_container: containerId, 
-            data: response.data 
+        res.json({
+            from: 'API Gateway',
+            gateway_container: containerId,
+            data: response.data
         });
     } catch (error) {
-        res.status(500).json({ 
+        res.status(500).json({
             error: error.response?.data?.error || 'Product service unavailable',
-            gateway_container: containerId 
+            gateway_container: containerId
         });
     }
 });
 
+
+const API_KEY = fs.readFileSync('/run/secrets/api_key', 'utf8').trim();
+const JWT_SECRET = fs.readFileSync('/run/secrets/jwt_secret', 'utf8').trim();
+
+console.log('Secrets loaded successfully', API_KEY, JWT_SECRET);
+
+app.get('/check-secrets', (req, res) => {
+    const hasApiKey = fs.existsSync('/run/secrets/api_key');
+    const hasJwtSecret = fs.existsSync('/run/secrets/jwt_secret');
+
+    res.json({
+        api_key_exists: hasApiKey,
+        jwt_secret_exists: hasJwtSecret,
+        api_key_value: hasApiKey ? fs.readFileSync('/run/secrets/api_key', 'utf8').trim() : null
+    });
+});
+
 // Health check
 app.get('/health', (req, res) => {
-    res.json({ 
-        status: 'healthy', 
+    res.json({
+        status: 'healthy',
         version: VERSION,
-        service: 'api-gateway', 
-        container: containerId 
+        service: 'api-gateway',
+        container: containerId
     });
 });
 

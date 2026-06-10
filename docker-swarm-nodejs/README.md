@@ -333,3 +333,253 @@ text
 {"error":"Product is being purchased. Try again."}
 {"success":true,"message":"Purchased 1 x Laptop","remainingStock":8}
 
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+#Secret in docker
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+Create Secrets
+bash
+echo "your-password" | docker secret create secret_name -
+
+List Secrets
+bash
+docker secret ls
+
+Remove Secret
+bash
+docker secret rm secret_name
+
+🔧 Implementation Steps
+1. Create Secrets
+bash
+echo "my-api-key-123" | docker secret create api_key -
+echo "my-jwt-secret-456" | docker secret create jwt_secret -
+echo "db-password-789" | docker secret create db_password -
+
+2. Add to docker-compose.yaml
+yaml
+services:
+  api-gateway:
+    secrets:
+      - api_key
+      - jwt_secret
+
+secrets:
+  api_key:
+    external: true
+  jwt_secret:
+    external: true
+
+3. Deploy Stack
+bash
+docker stack deploy -c docker-compose.yaml demo
+
+4. Verify Secrets in Container
+bash
+docker exec <container> ls -la /run/secrets/
+docker exec <container> cat /run/secrets/api_key
+
+when everything is deleted need to create secret again 
+
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+Autoscaling concept
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+Here without any external file like prometheus, directly it identifies and scale up and down 
+Initially without load test, CPU is 0 so replica will be reduced from 3 to 2 and to 1
+after doin the load test replica will be scalled fromn 1 to 2
+
+                              START
+                                │
+                                ▼
+                        Install tools (apk add...)
+                                │
+                                ▼
+                  ┌─────────────────────────────────────┐
+                  │         FOREVER LOOP                │
+                  │                                     │
+                  │  1. Find product container          │
+                  │  2. Get its CPU %                   │
+                  │  3. Get current replica count       │
+                  │  4. Log: "CPU=8% REPLICAS=2"        │
+                  │                                     │
+                  │  5. Is CPU > 5%?                    │
+                  │     YES → Scale UP (+1 container)   │
+                  │            Wait 120 seconds         │
+                  │                                     │
+                  │  6. Is CPU < 2%?                    │
+                  │     YES → Scale DOWN (-1 container) │
+                  │            Wait 120 seconds         │
+                  │                                     │
+                  │  7. Wait 30 seconds                 │
+                  │     └──→ Back to step 1             │
+                  └─────────────────────────────────────
+
+Cooldown = Waiting time after scaling before you can scale again. here in this case is 120
+
+if anything running already 
+docker swarm leave --force
+docker swarm init
+docker stack rm demo
+docker service ls
+docker network ls
+docker network rm demo_my-swarm-network
+docker compose build
+echo "my-api-key-123" | docker secret create api_key -
+echo "my-jwt-secret-456" | docker secret create jwt_secret -
+docker stack deploy -c docker-compose.yaml demo
+docker service ls
+
+#for load test use this command 
+>>>>>>>>>>>>>>>>>>>>>>>>echo "Starting load test at $(date)"
+end=$((SECONDS+120))
+count=0
+while [ $SECONDS -lt $end ]; do
+  for i in {1..50}; do
+    curl -s -X POST http://localhost:8080/products/1/buy \
+      -H "Content-Type: application/json" \
+      -d '{"quantity":1}' > /dev/null 2>&1 &
+  done
+  count=$((count + 50))
+  if [ $((count % 500)) -eq 0 ]; then
+    echo "Sent $count requests so far..."
+    # Show current CPU
+    docker stats --no-stream --format "Current CPU: {{.CPUPerc}}" $(docker ps -q --filter name=product-service) 2>/dev/null | head -1
+  fi
+  sleep 0.5
+done
+wait
+echo "Load test complete! Sent $count total requests"
+echo "Finished at $(date)"
+
+#check replica status
+while true; do clear; echo "=== $(date '+%H:%M:%S') ==="; docker service ls | grep product-service; sleep 2; done
+
+#check cpu status
+while true; do
+  clear
+  echo "=== $(date '+%H:%M:%S') ==="
+  docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}" $(docker ps -q --filter name=product-service) 2>/dev/null
+  echo ""
+  echo "Replicas:"
+  docker service ls --filter name=product-service --format "{{.Replicas}}"
+  sleep 2
+done
+
+#check live logs
+docker service logs -f demo_autoscaler
+
+demo_autoscaler.1.oylnbxrqngk2@docker-desktop    | CPU=0.00 REPLICAS=1
+demo_autoscaler.1.oylnbxrqngk2@docker-desktop    | CPU=3.24 REPLICAS=1
+demo_autoscaler.1.oylnbxrqngk2@docker-desktop    | CPU=3.64 REPLICAS=1
+demo_autoscaler.1.oylnbxrqngk2@docker-desktop    | CPU=0.02 REPLICAS=1
+demo_autoscaler.1.oylnbxrqngk2@docker-desktop    | CPU=5.86 REPLICAS=1
+demo_autoscaler.1.oylnbxrqngk2@docker-desktop    | Scaling UP to 2 replicas
+demo_autoscaler.1.oylnbxrqngk2@docker-desktop    | demo_product-service scaled to 2
+demo_autoscaler.1.oylnbxrqngk2@docker-desktop    | overall progress: 0 out of 2 tasks
+demo_autoscaler.1.oylnbxrqngk2@docker-desktop    | 1/2:  
+demo_autoscaler.1.oylnbxrqngk2@docker-desktop    | 2/2:  
+demo_autoscaler.1.oylnbxrqngk2@docker-desktop    | overall progress: 1 out of 2 tasks
+demo_autoscaler.1.oylnbxrqngk2@docker-desktop    | overall progress: 1 out of 2 tasks
+demo_autoscaler.1.oylnbxrqngk2@docker-desktop    | verify: Waiting 1 seconds to verify that tasks are stable...
+demo_autoscaler.1.oylnbxrqngk2@docker-desktop    | verify: Waiting 1 seconds to verify that tasks are stable...
+demo_autoscaler.1.oylnbxrqngk2@docker-desktop    | verify: Service demo_product-service converged
+demo_autoscaler.1.oylnbxrqngk2@docker-desktop    | CPU=0.00 REPLICAS=2
+demo_autoscaler.1.oylnbxrqngk2@docker-desktop    | Scaling DOWN to 1 replicas
+demo_autoscaler.1.oylnbxrqngk2@docker-desktop    | demo_product-service scaled to 1
+demo_autoscaler.1.oylnbxrqngk2@docker-desktop    | overall progress: 0 out of 1 tasks
+demo_autoscaler.1.oylnbxrqngk2@docker-desktop    | 1/1:  
+demo_autoscaler.1.oylnbxrqngk2@docker-desktop    | overall progress: 1 out of 1 tasks
+demo_autoscaler.1.oylnbxrqngk2@docker-desktop    | verify: Waiting 5 seconds to verify that tasks are stable...
+demo_autoscaler.1.oylnbxrqngk2@docker-desktop    | verify: Waiting 1 seconds to verify that tasks are stable...
+demo_autoscaler.1.oylnbxrqngk2@docker-desktop    | verify: Service demo_product-service converged
+
+Error faced in autoscaling and fix
+The unexpected "(" error happened because YAML saw $(...) and tried to evaluate 
+it as YAML code, not pass it to the shell. When you escaped it with $$(...), 
+YAML passed $(...) correctly to the shell.
+
+  autoscaler:
+    image: alpine:latest
+    volumes:
+    #It mounts the Docker daemon socket into the container, allowing the container to run Docker commands
+    # and control the host's Docker engine.
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - my-swarm-network
+    deploy:
+      placement:
+        constraints: [node.role == manager]
+    command:
+      - sh
+      - -c
+      - |
+          apk add --no-cache docker-cli bc
+
+          while true; do
+
+            CONTAINER=$$(docker ps -q --filter name=demo_product-service | head -1)
+
+            if [ -n "$$CONTAINER" ]; then
+              CPU=$$(docker stats --no-stream --format "{{.CPUPerc}}" $$CONTAINER | sed 's/%//')
+            else
+              CPU=0
+            fi
+
+            REPLICAS=$$(docker service inspect demo_product-service \
+              --format '{{.Spec.Mode.Replicated.Replicas}}')
+
+            echo "CPU=$$CPU REPLICAS=$$REPLICAS"
+
+            HIGH=$$(echo "$$CPU > 5" | bc)
+            LOW=$$(echo "$$CPU < 2" | bc)
+
+            if [ "$$HIGH" = "1" ]; then
+              if [ "$$REPLICAS" -lt 8 ]; then
+                NEW=$$(expr $$REPLICAS + 1)
+
+                echo "Scaling UP to $$NEW replicas"
+
+                docker service scale demo_product-service=$$NEW
+
+                sleep 120
+              fi
+            fi
+
+            if [ "$$LOW" = "1" ]; then
+              if [ "$$REPLICAS" -gt 1 ]; then
+                NEW=$$(expr $$REPLICAS - 1)
+
+                echo "Scaling DOWN to $$NEW replicas"
+
+                docker service scale demo_product-service=$$NEW
+
+                sleep 120
+              fi
+            fi
+
+            sleep 30
+
+          done
+
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+Implemented Helath check 
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
+# Install curl for health checks in the docker file very important
+RUN apk add --no-cache curl 
+
+docker compose build 
+
+docker stack deploy -c docker-compose.yaml demo
+
+najirabanum@NAJIRAs-MacBook-Air docker-swarm-nodejs % docker ps                             
+CONTAINER ID   IMAGE                       COMMAND                  CREATED              STATUS                        PORTS      NAMES
+43947bf831ee   swarm-demo/product:latest   "docker-entrypoint.s…"   About a minute ago   Up About a minute (healthy)   3002/tcp   demo_product-service.3.qgdjedtsli9czh7ulqow1fd6v
+3bb6d4e2ae75   swarm-demo/product:latest   "docker-entrypoint.s…"   About a minute ago   Up About a minute (healthy)   3002/tcp   demo_product-service.2.ynqetenavaku720d0xq70zlnh
+105dcd9c848b   swarm-demo/product:latest   "docker-entrypoint.s…"   About a minute ago   Up About a minute (healthy)   3002/tcp   demo_product-service.1.0kj9szby8i1sdbcwhldlcckgb
+02ff622c8e0d   swarm-demo/user:latest      "docker-entrypoint.s…"   About a minute ago   Up About a minute (healthy)   3001/tcp   demo_user-service.2.x8b26n5ctfu9yyjv2k27kc0i7
+0dac791875a8   swarm-demo/user:latest      "docker-entrypoint.s…"   2 minutes ago        Up About a minute (healthy)   3001/tcp   demo_user-service.1.lp79oju79nskxwwobmiolf5ot
+cfca5140f162   f4bfa149cd56                "docker-entrypoint.s…"   4 minutes ago        Up 4 minutes (healthy)        3000/tcp   demo_api-gateway.1.vfbiplw1iz3p3e4tv7jozro9w
+fb1ea07496b1   f4bfa149cd56                "docker-entrypoint.s…"   5 minutes ago        Up 4 minutes (healthy)        3000/tcp   demo_api-gateway.2.e90ebfppmfsd8vwloljttp70b
+8ca207953052   alpine:latest               "sh -c 'apk add --no…"   33 minutes ago       Up 33 minutes                            demo_autoscaler.1.c715hjkod42xpokrd8tqfsgok
+cd1ebd0d8236   redis:7-alpine              "docker-entrypoint.s…"   33 minutes ago       Up 33 minutes                 6379/tcp   demo_redis.1.zonef8wridqif1tj30g0cyqqr
+
