@@ -38,7 +38,7 @@ services:
     build: ./services/Users
     image: swarm-demo/user:latest
     deploy:
-      replicas: 3
+      # replicas: 3
       labels:
         - autoscale=true
         - autoscale.min=2
@@ -71,7 +71,7 @@ services:
     build: ./services/Products
     image: swarm-demo/product:latest
     deploy:
-      replicas: 3
+      # replicas: 3
       labels:
         - autoscale=true
         - autoscale.min=1
@@ -124,6 +124,7 @@ services:
     deploy:
       replicas: 1
       placement:
+        #It forces the container to run only on the manager node. 
         constraints: [node.role == manager]
     command:
       - sh
@@ -186,14 +187,14 @@ services:
               NEW=$$((REPLICAS + 1))
               echo ">>> SCALING UP $$TARGET_SERVICE: $$REPLICAS -> $$NEW (CPU: $${AVG_CPU}%)"
               docker service scale $$TARGET_SERVICE=$$NEW
-              sleep 120
+              sleep 30
             fi
             
             if [ "$$LOW" = "1" ] && [ $$REPLICAS -gt $$MIN ]; then
               NEW=$$((REPLICAS - 1))
               echo "<<< SCALING DOWN $$TARGET_SERVICE: $$REPLICAS -> $$NEW (CPU: $${AVG_CPU}%)"
               docker service scale $$TARGET_SERVICE=$$NEW
-              sleep 120
+              sleep 30
             fi
           done
           

@@ -1,0 +1,471 @@
+# 🐳 Docker Swarm Node.js Project with Autoscaling
+
+A complete production-ready Docker Swarm project with Node.js microservices, Redis caching, and **built-in autoscaling** (no external tools needed!).
+
+## 📋 What is Docker Swarm?
+
+Docker Swarm turns multiple Docker servers into one big virtual server. It helps you:
+- Run multiple copies of your app for high availability
+- Automatically restart crashed containers (self-healing)
+- Distribute traffic between containers (load balancing)
+- Update your app without downtime (rolling updates)
+- **Automatically scale services based on CPU usage** (autoscaling)
+
+## 🏗️ Project Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    DOCKER SWARM CLUSTER                      │
+│                                                              │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │                   API GATEWAY (Port 8080)            │    │
+│  │              Routes requests to services             │    │
+│  └───────────────┬─────────────────┬───────────────────┘    │
+│                  │                 │                         │
+│         ┌────────▼────────┐   ┌─────▼──────────┐             │
+│         │  USER SERVICE   │   │ PRODUCT SERVICE│             │
+│         │   Port 3001     │   │   Port 3002    │             │
+│         │  (3 replicas)   │   │  (3 replicas)  │             │
+│         └────────┬────────┘   └─────┬──────────┘             │
+│                  │                 │                         │
+│                  └─────────┬───────┘                         │
+│                            │                                 │
+│                    ┌───────▼───────┐                         │
+│                    │ REDIS (Cache) │                         │
+│                    │   Port 6379   │                         │
+│                    └───────────────┘                         │
+│                                                              │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │              AUTOSCALER (Built-in)                   │    │
+│  │    Monitors CPU every 30 seconds                    │    │
+│  │    Scales UP when CPU > threshold                   │    │
+│  │    Scales DOWN when CPU < threshold                 │    │
+│  └─────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## 🚀 Quick Start (5 Minutes)
+
+### Prerequisites
+- Docker Desktop installed
+- Node.js (optional - Docker handles this)
+
+### Step 1: Clone or Create Project
+```bash
+mkdir my-swarm-project
+cd my-swarm-project
+```
+
+### Step 2: Initialize Docker Swarm
+```bash
+# Turn on Swarm mode
+docker swarm init
+```
+
+### Step 3: Create Secrets
+```bash
+# Create API secrets
+echo "my-api-key-123" | docker secret create api_key -
+echo "my-jwt-secret-456" | docker secret create jwt_secret -
+```
+
+### Step 4: Build and Deploy
+```bash
+# Build all Docker images
+docker compose build
+
+# Deploy to Swarm
+docker stack deploy -c docker-compose.yaml demo
+
+# Check if running
+docker service ls
+```
+
+## 📊 Service Details
+
+| Service | Replicas | Port | Purpose |
+|---------|----------|------|---------|
+| API Gateway | 2 | 8080 | Entry point, routes requests |
+| User Service | 3 | 3001 | User management with Redis cache |
+| Product Service | 3 | 3002 | Product management with Redis lock |
+| Redis | 1 | 6379 | Caching and distributed locking |
+| Autoscaler | 1 | - | CPU-based autoscaling |
+
+## 🔄 Service Discovery
+
+Services communicate by **service name**, not IP addresses:
+
+| From | To | Uses URL |
+|------|-----|----------|
+| API Gateway | User Service | `http://user-service:3001` |
+| API Gateway | Product Service | `http://product-service:3002` |
+| User Service | Redis | `redis://demo_redis:6379` |
+| Product Service | Redis | `redis://demo_redis:6379` |
+
+## 📝 Useful Commands
+
+### Service Management
+
+```bash
+# List all services
+docker service ls
+
+# List all containers in a service
+docker service ps demo_product-service
+
+# Scale a service manually
+docker service scale demo_product-service=5
+
+# Force restart a service
+docker service update --force demo_api-gateway
+
+# Remove entire stack
+docker stack rm demo
+```
+
+### Monitoring Commands
+
+```bash
+# Watch service status in real-time
+while true; do clear; docker service ls; sleep 3; done
+
+# Watch product service replicas
+while true; do clear; docker service ls | grep product-service; sleep 2; done
+
+# Check container health
+docker ps --format "table {{.Names}}\t{{.Status}}"
+
+# View service logs
+docker service logs demo_api-gateway --tail=50
+docker service logs demo_product-service -f
+```
+
+### Testing Endpoints
+
+```bash
+# Test API Gateway
+curl http://localhost:8080/
+
+# Get all users
+curl http://localhost:8080/users
+
+# Get all products
+curl http://localhost:8080/products
+
+# Check product stock
+curl http://localhost:8080/products/1/stock
+
+# Buy a product (with Redis lock)
+curl -X POST http://localhost:8080/products/1/buy \
+  -H "Content-Type: application/json" \
+  -d '{"quantity":1}'
+
+# Check secrets
+curl http://localhost:8080/check-secrets
+
+# Health check
+curl http://localhost:8080/health
+```
+
+## 🔒 Redis Distributed Lock
+
+**Problem:** Multiple users buying same product simultaneously can oversell stock.
+
+**Solution:** Redis lock ensures only ONE purchase happens at a time.
+
+### Test Concurrent Purchases
+```bash
+# Run 3 purchases simultaneously (only 1 succeeds, 2 get lock error)
+for i in {1..3}; do
+    curl -X POST http://localhost:8080/products/1/buy \
+      -H "Content-Type: application/json" \
+      -d '{"quantity":1}' &
+done
+wait
+```
+
+## 📈 Autoscaling (Built-in, No External Tools!)
+
+Your autoscaler monitors CPU every 30 seconds and scales automatically:
+
+### How Autoscaling Works
+
+```
+                    START
+                      │
+                      ▼
+              Install tools (apk add...)
+                      │
+                      ▼
+        ┌─────────────────────────────────────┐
+        │         FOREVER LOOP                │
+        │                                     │
+        │  1. Find product container          │
+        │  2. Get its CPU %                   │
+        │  3. Get current replica count       │
+        │  4. Log: "CPU=8% REPLICAS=2"        │
+        │                                     │
+        │  5. Is CPU > 5%?                    │
+        │     YES → Scale UP (+1 container)   │
+        │            Wait 120 seconds         │
+        │                                     │
+        │  6. Is CPU < 2%?                    │
+        │     YES → Scale DOWN (-1 container) │
+        │            Wait 120 seconds         │
+        │                                     │
+        │  7. Wait 30 seconds                 │
+        │     └──→ Back to step 1             │
+        └─────────────────────────────────────┘
+```
+
+### Autoscaling Configuration
+
+| Parameter | Value | Meaning |
+|-----------|-------|---------|
+| Scale UP threshold | CPU > 5% | Add a replica when CPU exceeds 5% |
+| Scale DOWN threshold | CPU < 2% | Remove a replica when CPU drops below 2% |
+| Min replicas | 1 | Never go below 1 container |
+| Max replicas | 8 | Never go above 8 containers |
+| Check interval | 30 seconds | Check CPU every 30 seconds |
+| Cooldown period | 120 seconds | Wait 2 minutes before next scaling |
+
+### Generate Load to Test Autoscaling
+
+```bash
+# Heavy load test (2 minutes)
+echo "Starting load test at $(date)"
+end=$((SECONDS+120))
+count=0
+while [ $SECONDS -lt $end ]; do
+  for i in {1..50}; do
+    curl -s -X POST http://localhost:8080/products/1/buy \
+      -H "Content-Type: application/json" \
+      -d '{"quantity":1}' > /dev/null 2>&1 &
+  done
+  count=$((count + 50))
+  if [ $((count % 500)) -eq 0 ]; then
+    echo "Sent $count requests..."
+    docker stats --no-stream --format "CPU: {{.CPUPerc}}" \
+      $(docker ps -q --filter name=product-service) 2>/dev/null | head -1
+  fi
+  sleep 0.5
+done
+wait
+echo "Load test complete! Sent $count requests"
+```
+
+### Monitor Autoscaling
+
+```bash
+# Watch autoscaler logs
+docker service logs -f demo_autoscaler
+
+# Watch replica count
+while true; do clear; docker service ls | grep product-service; sleep 2; done
+
+# Watch CPU usage
+while true; do
+  clear
+  docker stats --no-stream $(docker ps -q --filter name=product-service) 2>/dev/null
+  sleep 2
+done
+```
+
+### Expected Autoscaler Output
+
+```
+CPU=0.00 REPLICAS=3
+CPU=5.86 REPLICAS=3
+Scaling UP to 4 replicas
+demo_product-service scaled to 4
+CPU=2.10 REPLICAS=4
+CPU=0.00 REPLICAS=4
+Scaling DOWN to 3 replicas
+demo_product-service scaled to 3
+```
+
+## 🔄 Rolling Updates (Zero Downtime)
+
+Update your service without any downtime - Swarm updates containers one by one.
+
+### Step 1: Build new version
+```bash
+docker build -t swarm-demo/gateway:v2 ./services/ApiGateway
+```
+
+### Step 2: Update the service
+```bash
+docker service update --image swarm-demo/gateway:v2 demo_api-gateway
+```
+
+### Step 3: Monitor rolling update
+```bash
+while true; do
+  clear
+  docker service ps demo_api-gateway
+  sleep 2
+done
+```
+
+### Step 4: Rollback if needed
+```bash
+docker service rollback demo_api-gateway
+```
+
+## 💊 Health Checks
+
+Each service has a `/health` endpoint. Docker Swarm automatically restarts unhealthy containers.
+
+### Check Health Status
+```bash
+# See all containers with health status
+docker ps --format "table {{.Names}}\t{{.Status}}"
+
+# Expected output shows (healthy)
+demo_product-service.1    Up 2 minutes (healthy)
+demo_product-service.2    Up 2 minutes (healthy)
+demo_user-service.1       Up 2 minutes (healthy)
+```
+
+### Test Health Endpoints
+```bash
+# API Gateway health
+curl http://localhost:8080/health
+
+# Direct service health (from inside container)
+docker exec <container-id> wget -q -O- http://localhost:3002/health
+```
+
+## 🔐 Secrets Management
+
+Secrets are encrypted and only accessible to authorized services.
+
+### Create Secrets
+```bash
+echo "my-api-key" | docker secret create api_key -
+echo "my-jwt-secret" | docker secret create jwt_secret -
+```
+
+### List Secrets
+```bash
+docker secret ls
+```
+
+### Verify Secrets in Container
+```bash
+docker exec <container-id> ls -la /run/secrets/
+docker exec <container-id> cat /run/secrets/api_key
+```
+
+### Remove Secrets (if needed)
+```bash
+docker secret rm api_key jwt_secret
+```
+
+## 🛠️ Troubleshooting
+
+### Service Not Starting
+```bash
+# Check service logs
+docker service logs demo_api-gateway --tail=50
+
+# Check service tasks
+docker service ps demo_api-gateway
+
+# Force restart
+docker service update --force demo_api-gateway
+```
+
+### Exit Code 137 (Out of Memory)
+- Increase memory limits in docker-compose.yaml
+- Or remove memory limits temporarily
+
+### Container Shows (unhealthy)
+- Ensure `/health` endpoint exists in your code
+- Check if curl is installed in Dockerfile: `RUN apk add --no-cache curl`
+
+### Clean Everything and Start Fresh
+```bash
+# Remove stack
+docker stack rm demo
+
+# Leave swarm
+docker swarm leave --force
+
+# Remove images
+docker rmi $(docker images -q) 2>/dev/null
+
+# Re-initialize
+docker swarm init
+
+# Re-create secrets
+echo "my-api-key-123" | docker secret create api_key -
+echo "my-jwt-secret-456" | docker secret create jwt_secret -
+
+# Rebuild and deploy
+docker compose build
+docker stack deploy -c docker-compose.yaml demo
+```
+
+## 📁 Project Structure
+
+```
+my-swarm-project/
+├── docker-compose.yaml
+├── services/
+│   ├── ApiGateway/
+│   │   ├── Dockerfile
+│   │   ├── package.json
+│   │   └── server.js
+│   ├── Users/
+│   │   ├── Dockerfile
+│   │   ├── package.json
+│   │   └── server.js
+│   └── Products/
+│       ├── Dockerfile
+│       ├── package.json
+│       └── server.js
+```
+
+## 🎯 Key Concepts Learned
+
+| Concept | What It Does |
+|---------|--------------|
+| **Docker Swarm** | Clusters multiple Docker hosts |
+| **Services** | Desired state of your application |
+| **Replicas** | Number of container copies running |
+| **Rolling Update** | Zero-downtime deployments |
+| **Self-Healing** | Automatically restarts failed containers |
+| **Load Balancing** | Distributes traffic across replicas |
+| **Service Discovery** | Containers find each other by name |
+| **Autoscaling** | Automatically adjusts replicas based on CPU |
+| **Distributed Lock** | Prevents race conditions with Redis |
+| **Secrets** | Securely manage sensitive data |
+| **Health Checks** | Monitor container health |
+
+## 🎉 Summary
+
+You now have a production-ready Docker Swarm setup with:
+
+✅ **Multiple microservices** (API Gateway, User, Product)  
+✅ **Redis caching** for faster responses  
+✅ **Redis distributed lock** to prevent race conditions  
+✅ **Built-in autoscaling** (no external tools!)  
+✅ **Zero-downtime rolling updates**  
+✅ **Self-healing** (auto-restart on failure)  
+✅ **Health checks** for all services  
+✅ **Secrets management** for sensitive data  
+✅ **Load balancing** across replicas  
+
+## 🚀 Next Steps
+
+1. Add more services to your stack
+2. Implement custom metrics for autoscaling
+3. Add a database (PostgreSQL, MySQL)
+4. Set up a reverse proxy (Traefik, Nginx)
+5. Add monitoring (Prometheus + Grafana)
+6. Implement CI/CD pipeline
+
+---
+
+**Happy Swarming! 🐳**
