@@ -1,0 +1,40 @@
+services:
+  mongo:
+    image: mongo:5.0
+    container_name: mongo
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.10.2
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+
+  graylog:
+    image: graylog/graylog:5.1
+    container_name: graylog
+    environment:
+      - GRAYLOG_PASSWORD_SECRET=somepasswordpepper
+      - GRAYLOG_ROOT_PASSWORD_SHA2=8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918
+      - GRAYLOG_HTTP_EXTERNAL_URI=http://127.0.0.1:9000/
+      - GRAYLOG_ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - GRAYLOG_MONGODB_URI=mongodb://mongo:27017/graylog
+    ports:
+      - "9000:9000"
+      - "12201:12201/udp"
+    depends_on:
+      - mongo
+      - elasticsearch
+
+  app-graylog:
+    image: node:18-alpine
+    container_name: app-graylog
+    command: node -e "setInterval(() => console.log('GRAYLOG App running huhuuhuuhuhuhuuuuuuuu'), 2000)"
+    logging:
+      driver: gelf
+      options:
+        gelf-address: "udp://127.0.0.1:12201"
+        tag: "graylog-app"
+    depends_on:
+      - graylog
+    restart: on-failure

@@ -1,0 +1,82 @@
+services:
+  app-syslog:
+    image: node:18-alpine
+    container_name: app-syslog
+    command: node -e "setInterval(() => console.log('SYSLOG App running'), 2000)"
+    logging:
+      driver: syslog
+      options:
+        syslog-address: "tcp://127.0.0.1:514"
+        tag: "syslog-app"
+    depends_on:
+      syslog-server:
+        condition: service_healthy
+    restart: on-failure
+
+  syslog-server:
+    image: alpine:latest
+    container_name: syslog-server
+    command: sh -c "apk add --no-cache rsyslog && rsyslogd -n"
+    ports:
+      - "514:514"
+    volumes:
+      - ./rsyslog.conf:/etc/rsyslog.conf
+      - ./logs-syslog:/var/log
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "514"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+
+  app-json:
+    image: node:18-alpine
+    container_name: app-json
+    command: node -e "setInterval(() => console.log('JSON App running'), 2000)"
+    logging:
+      driver: json-file
+      options:
+        tag: "json-app"
+    restart: on-failure
+    
+  app-fluentd:
+    image: node:18-alpine
+    container_name: app-fluentd
+    command: node -e "setInterval(() => console.log('FLUENTD App running'), 2000)"
+    logging:
+      driver: loki
+      options:
+        loki-url: "http://host.docker.internal:3100/loki/api/v1/push"
+        loki-external-labels: "job=fluentd-direct"
+    depends_on:
+      - loki
+    restart: on-failure
+
+  promtail:
+    image: grafana/promtail:latest
+    container_name: promtail
+    volumes:
+      - ./promtail-config.yml:/etc/promtail/config.yml
+      - ./logs-syslog:/var/log
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+
+  loki:
+    image: grafana/loki:latest
+    container_name: loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./loki-config.yaml:/etc/loki/config.yaml
+    command: -config.file=/etc/loki/config.yaml
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
