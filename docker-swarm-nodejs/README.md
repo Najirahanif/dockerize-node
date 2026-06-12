@@ -1121,3 +1121,20 @@ for i in {1..15}; do  curl -s http://localhost:8080/users > /dev/null
   echo "Request $i"
   sleep 1
 done
+
+========================================================================================================
+Added cAdvisor
+========================================================================================================\
+cAdvisor (Container Advisor) is a tool that collects resource usage metrics from running containers:
+
+1. cAdvisor Web UI (Visual dashboard)
+bash
+# Open in browser
+open http://localhost:8081
+
+2. In Grafana (Dashboards)
+Open Grafana: http://localhost:3000 (admin/admin)
+
+Add Prometheus data source if not already
+
+

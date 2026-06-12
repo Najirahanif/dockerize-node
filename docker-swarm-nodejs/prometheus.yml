@@ -31,3 +31,8 @@ scrape_configs:
       - targets: ['product-service:3002']
     metrics_path: '/metrics'
     scrape_interval: 30s
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+    metrics_path: '/metrics'
+    scrape_interval: 15s

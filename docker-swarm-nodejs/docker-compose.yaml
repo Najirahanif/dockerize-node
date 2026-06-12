@@ -286,6 +286,29 @@ services:
       - "3000:3000"
     networks:
       - my-swarm-network
+
+  # ============================================
+  # cAdvisor - Container monitoring (ADDED)
+  # ============================================
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    deploy:
+      mode: global
+    ports:
+      - "8081:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    networks:
+      - my-swarm-network
+    logging:
+      driver: loki
+      options:
+        loki-url: "http://host.docker.internal:3100/loki/api/v1/push"
+        loki-external-labels: "service=cadvisor,env=production"
+
 networks:
   my-swarm-network:
     driver: overlay
