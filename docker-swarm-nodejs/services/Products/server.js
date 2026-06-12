@@ -1,17 +1,92 @@
 const express = require('express');
 const redis = require('redis');
 const os = require('os');
+const promClient = require('prom-client');
 
 const app = express();
 const PORT = 3002;
 const containerId = os.hostname().substring(0, 8);
 
-// IMPORTANT: This middleware parses JSON bodies
 app.use(express.json());
+
+// ============================================
+// PROMETHEUS METRICS (Built-in)
+// ============================================
+const register = new promClient.Registry();
+const serviceName = 'product_service';
+
+// Collect default metrics
+promClient.collectDefaultMetrics({ register });
+
+// Custom metrics
+const httpRequestsTotal = new promClient.Counter({
+    name: `${serviceName}_http_requests_total`,
+    help: 'Total number of HTTP requests',
+    labelNames: ['method', 'route', 'status_code'],
+    registers: [register]
+});
+
+const httpRequestDuration = new promClient.Histogram({
+    name: `${serviceName}_http_request_duration_seconds`,
+    help: 'Duration of HTTP requests in seconds',
+    labelNames: ['method', 'route', 'status_code'],
+    registers: [register]
+});
+
+const activeProducts = new promClient.Gauge({
+    name: `${serviceName}_active_products_total`,
+    help: 'Total number of products in memory',
+    registers: [register]
+});
+
+const productPurchases = new promClient.Counter({
+    name: `${serviceName}_purchases_total`,
+    help: 'Total number of product purchases',
+    labelNames: ['product_id', 'product_name'],
+    registers: [register]
+});
+
+const stockLevel = new promClient.Gauge({
+    name: `${serviceName}_stock_level`,
+    help: 'Current stock level for products',
+    labelNames: ['product_id', 'product_name'],
+    registers: [register]
+});
+
+const redisOps = new promClient.Counter({
+    name: `${serviceName}_redis_operations_total`,
+    help: 'Total number of Redis operations',
+    labelNames: ['operation'],
+    registers: [register]
+});
+
+// Metrics middleware
+app.use((req, res, next) => {
+    const start = Date.now();
+    
+    res.on('finish', () => {
+        const duration = (Date.now() - start) / 1000;
+        
+        httpRequestsTotal.inc({
+            method: req.method,
+            route: req.route ? req.route.path : req.path,
+            status_code: res.statusCode
+        });
+        
+        httpRequestDuration.observe({
+            method: req.method,
+            route: req.route ? req.route.path : req.path,
+            status_code: res.statusCode
+        }, duration);
+    });
+    
+    next();
+});
+// ============================================
 
 // Connect to Redis
 const redisClient = redis.createClient({
-    url: 'redis://demo_redis:6379'
+    url: 'redis://app_redis:6379'
 });
 
 redisClient.on('error', (err) => console.error('Redis Error:', err));
@@ -30,15 +105,24 @@ const products = [
     { id: 5, name: 'USB Cable', price: 9.99, category: 'Accessories', stock: 100 }
 ];
 
+// Initialize stock metrics
+products.forEach(product => {
+    stockLevel.set({ product_id: product.id, product_name: product.name }, product.stock);
+});
+activeProducts.set(products.length);
+
 // Track API calls
 app.use(async (req, res, next) => {
     await redisClient.incr('product_service_requests');
+    redisOps.inc({ operation: 'incr_requests' });
     next();
 });
 
 // Home route
 app.get('/', async (req, res) => {
     const requestCount = await redisClient.get('product_service_requests');
+    redisOps.inc({ operation: 'get_requests' });
+    
     res.json({
         service: 'Product Service',
         container: containerId,
@@ -54,6 +138,7 @@ app.get('/products', async (req, res) => {
     
     try {
         const cachedProducts = await redisClient.get(cacheKey);
+        redisOps.inc({ operation: 'get_cache' });
         
         if (cachedProducts) {
             return res.json({
@@ -65,8 +150,13 @@ app.get('/products', async (req, res) => {
         }
         
         await redisClient.incr('product_fetches');
+        redisOps.inc({ operation: 'incr_fetches' });
+        
         const fetchCount = await redisClient.get('product_fetches');
+        redisOps.inc({ operation: 'get_fetches' });
+        
         await redisClient.setEx(cacheKey, 30, JSON.stringify(products));
+        redisOps.inc({ operation: 'set_cache' });
         
         res.json({
             service: 'product-service',
@@ -88,6 +178,7 @@ app.get('/products/:id', async (req, res) => {
     
     try {
         const cachedProduct = await redisClient.get(cacheKey);
+        redisOps.inc({ operation: 'get_product_cache' });
         
         if (cachedProduct) {
             return res.json({
@@ -104,6 +195,7 @@ app.get('/products/:id', async (req, res) => {
         }
         
         await redisClient.setEx(cacheKey, 60, JSON.stringify(product));
+        redisOps.inc({ operation: 'set_product_cache' });
         
         res.json({
             service: 'product-service',
@@ -123,6 +215,9 @@ app.get('/products/:id/stock', async (req, res) => {
     if (!product) {
         return res.status(404).json({ error: 'Product not found' });
     }
+    
+    stockLevel.set({ product_id: product.id, product_name: product.name }, product.stock);
+    
     res.json({
         product: product.name,
         stock: product.stock,
@@ -133,12 +228,12 @@ app.get('/products/:id/stock', async (req, res) => {
 // Buy product with Redis lock
 app.post('/products/:id/buy', async (req, res) => {
     const productId = parseInt(req.params.id);
-    const quantity = req.body.quantity || 1;  // Now req.body works!
+    const quantity = req.body.quantity || 1;
     const lockKey = `lock:product:${productId}`;
     
     try {
-        // Try to acquire lock
         const lockAcquired = await redisClient.setNX(lockKey, containerId);
+        redisOps.inc({ operation: 'acquire_lock' });
         
         if (!lockAcquired) {
             return res.status(409).json({ 
@@ -161,13 +256,20 @@ app.post('/products/:id/buy', async (req, res) => {
             return res.status(400).json({ error: 'Insufficient stock' });
         }
         
-        // Simulate processing
         await new Promise(resolve => setTimeout(resolve, 1000));
         
         product.stock -= quantity;
+        
+        stockLevel.set({ product_id: product.id, product_name: product.name }, product.stock);
+        productPurchases.inc({ 
+            product_id: product.id, 
+            product_name: product.name 
+        }, quantity);
+        
         await redisClient.del(`product_${productId}`);
         await redisClient.del('product_list');
         await redisClient.del(lockKey);
+        redisOps.inc({ operation: 'clear_cache' });
         
         res.json({
             success: true,
@@ -191,6 +293,12 @@ app.get('/health', async (req, res) => {
         container: containerId,
         redis: redisStatus
     });
+});
+
+// Metrics endpoint
+app.get('/metrics', async (req, res) => {
+    res.set('Content-Type', register.contentType);
+    res.end(await register.metrics());
 });
 
 app.listen(PORT, () => {

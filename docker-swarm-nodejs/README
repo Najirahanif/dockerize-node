@@ -469,3 +469,8 @@ You now have a production-ready Docker Swarm setup with:
 ---
 
 **Happy Swarming! 🐳**
+
+
+docker service ls | grep app
+
+docker stack rm app 2>/dev/null; sleep 5; docker stack deploy -c docker-compose.yaml app

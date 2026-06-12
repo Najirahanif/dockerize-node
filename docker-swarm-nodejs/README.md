@@ -310,6 +310,12 @@ docker stack rm demo
 docker swarm leave --force
 ```
 
+
+docker service ls | grep app
+
+docker stack rm app 2>/dev/null; sleep 5; docker stack deploy -c docker-compose.yaml app
+
+
 These cover 90% of day-to-day Docker Swarm operations.
 
 
@@ -906,3 +912,212 @@ cd1ebd0d8236   redis:7-alpine              "docker-entrypoint.s…"   33 minutes
 
 
 
+
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+### check if  issues in loki-congig.yaml try this 
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+# Remove old test container
+docker rm -f test-loki
+
+# Run Loki with corrected config
+docker run -d \
+  --name test-loki \
+  -p 3100:3100 \
+  -v $(pwd)/loki-config.yaml:/etc/loki/loki-config.yaml:ro \
+  grafana/loki:latest \
+  -config.file=/etc/loki/loki-config.yaml
+
+# Wait a few seconds
+sleep 5
+
+# Check logs - should be error-free now
+docker logs test-loki
+
+# Check if ready
+curl http://localhost:3100/ready
+
+# Should return "ready"
+
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+# Run the container to see the actual error
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
+docker run --rm swarm-demo/user:latest node /app/server.js
+
+# Rebuild all
+cd services/Users && docker build -t swarm-demo/user:latest . && cd ../.. && \
+cd services/Products && docker build -t swarm-demo/product:latest . && cd ../.. && \
+cd services/ApiGateway && docker build -t swarm-demo/gateway:latest . && cd ../.. && \
+docker service update --force app_user-service && \
+docker service update --force app_product-service && \
+docker service update --force app_api-gateway
+
+
+Keep your network name as my-swarm-network. Then create it manually once:
+
+docker network rm my-swarm-network
+
+bash
+docker network create --driver overlay --attachable my-swarm-network
+Now deploy:
+
+========================================================================================================
+### network container issue
+Check Swarm status
+========================================================================================================
+
+docker node ls
+
+If you're on a single-node local Swarm, the fastest fix is usually:
+
+docker swarm leave --force
+
+Then initialize again:
+
+docker swarm init
+
+Verify:
+
+docker node ls
+
+You should see your node as:
+
+Leader
+bash
+docker stack deploy -c docker-compose.yaml app
+
+
+========================================================================================================
+when any code changes change 
+========================================================================================================
+
+
+docker build --no-cache -t swarm-demo/gateway:latest ./services/ApiGateway
+
+docker build --no-cache -t swarm-demo/user:latest ./services/Users
+
+docker build --no-cache -t swarm-demo/product:latest ./services/Products
+
+docker stack deploy -c docker-compose.yaml app
+
+docker service ls
+
+
+### run the image directly
+
+
+========================================================================================================
+###Access Grafana
+========================================================================================================
+
+bash
+# Open in browser
+open http://localhost:3000
+Or manually open: http://localhost:3000
+
+Login credentials:
+
+Username: admin
+
+Password: admin (you'll be prompted to change it)
+
+3. Add Prometheus Data Source in Grafana
+Click the gear icon (⚙️) on the left sidebar → Data Sources
+
+Click Add data source (blue button)
+
+Search for and select Prometheus
+
+Configure:
+
+Name: Prometheus (or any name)
+
+URL: http://prometheus:9090
+
+Leave other settings as default
+
+Click Save & Test at the bottom
+
+You should see: "Data source is working"
+
+4. Create Your First Dashboard
+Click + (plus icon) on left sidebar → Dashboard
+
+Click Add visualization
+
+Select Prometheus as data source
+
+Add a query:
+
+Metric: user_service_http_requests_total
+
+Legend: {{job}}
+
+Click Apply (top right)
+
+Click Save (top right) → Give it a name like "My Dashboard"
+
+5. Add More Panels
+Click Add → Visualization
+
+Add another query: product_service_http_requests_total
+
+Click Apply
+
+6. View Logs in Grafana (Loki)
+Add Loki as data source:
+
+Gear icon → Data Sources → Add data source
+
+Select Loki
+
+URL: http://loki:3100
+
+Save & Test
+
+View logs:
+
+Click Explore (compass icon)
+
+Select Loki as data source
+
+Query: {service="user-service"}
+
+Click Run query
+
+========================================================================================================
+Access Prometheus UI
+========================================================================================================
+bash
+# Open in browser
+open http://localhost:9090
+Or manually open: http://localhost:9090
+
+Steps in Prometheus:
+
+Query metrics:
+
+Go to Graph tab
+
+Type a query like: user_service_http_requests_total
+
+Click Execute
+
+Click Graph to see the chart
+
+See all available metrics:
+
+Go to Status → Targets (see which services are up)
+
+Go to Status → Flags (see configuration)
+
+Use the dropdown next to "Execute" to see all metric names
+
+Common queries to try:
+
+
+
+for i in {1..15}; do  curl -s http://localhost:8080/users > /dev/null
+  echo "Request $i"
+  sleep 1
+done

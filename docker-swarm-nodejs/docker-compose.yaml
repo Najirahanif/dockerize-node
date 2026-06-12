@@ -23,15 +23,21 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-    secrets:
-      - api_key
-      - jwt_secret
+    # secrets:
+    #   - api_key
+    #   - jwt_secret
     environment:
       - NODE_ENV=production
     networks:
       - my-swarm-network
     ports:
       - "8080:3000"
+    # DIRECT LOKI DRIVER - Just like the example
+    logging:
+      driver: loki
+      options:
+        loki-url: "http://host.docker.internal:3100/loki/api/v1/push"
+        loki-external-labels: "service=api-gateway,env=production"
 
   # User Service - Manages users
   user-service:
@@ -65,6 +71,12 @@ services:
       - SERVICE_NAME=user-service
     networks:
       - my-swarm-network
+    # DIRECT LOKI DRIVER
+    logging:
+      driver: loki
+      options:
+        loki-url: "http://host.docker.internal:3100/loki/api/v1/push"
+        loki-external-labels: "service=user-service,env=production"
 
   # Product Service - Manages products
   product-service:
@@ -98,6 +110,12 @@ services:
       - SERVICE_NAME=product-service
     networks:
       - my-swarm-network
+    # DIRECT LOKI DRIVER
+    logging:
+      driver: loki
+      options:
+        loki-url: "http://host.docker.internal:3100/loki/api/v1/push"
+        loki-external-labels: "service=product-service,env=production"
 
   # Redis - With persistent storage using named volume
   redis:
@@ -114,7 +132,14 @@ services:
     command: redis-server --appendonly yes
     networks:
       - my-swarm-network
+    # DIRECT LOKI DRIVER
+    logging:
+      driver: loki
+      options:
+        loki-url: "http://loki:3100/loki/api/v1/push"
+        loki-external-labels: "service=redis,env=production"
 
+  # Autoscaler
   autoscaler:
     image: alpine:latest
     volumes:
@@ -200,6 +225,67 @@ services:
           
           sleep 30
         done
+    # DIRECT LOKI DRIVER
+    logging:
+      driver: loki
+      options:
+        loki-url: "http://loki:3100/loki/api/v1/push"
+        loki-external-labels: "service=autoscaler,env=production"
+    # Loki - Log storage (receives JSON directly from Docker driver)
+  loki:
+    image: grafana/loki:latest
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+    # volumes:
+    #   - ./loki-config.yaml:/etc/loki/loki-config.yaml
+    #   - loki-data:/loki
+    # command: -config.file=/etc/loki/loki-config.yml
+    ports:
+      - "3100:3100"
+    networks:
+      - my-swarm-network
+
+  # Prometheus - Metrics collection
+  prometheus:
+    image: prom/prometheus:latest
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+    ports:
+      - "9090:9090"
+    networks:
+      - my-swarm-network
+
+  # Grafana - Visualization
+  grafana:
+    image: grafana/grafana:latest
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ./grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    networks:
+      - my-swarm-network
 networks:
   my-swarm-network:
     driver: overlay
@@ -208,9 +294,15 @@ networks:
 # Named volumes section
 volumes:
   redis-data:
+  prometheus-data:
+  grafana-data:
 
-secrets:
-  api_key:
-    external: true
-  jwt_secret:
-    external: true
+configs:
+  prometheus_config:
+    file: ./prometheus.yml
+
+# secrets:
+#   api_key:
+#     external: true
+#   jwt_secret:
+#     external: true

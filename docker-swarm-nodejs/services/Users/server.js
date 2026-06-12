@@ -1,14 +1,95 @@
 const express = require('express');
 const redis = require('redis');
 const os = require('os');
+const promClient = require('prom-client'); 
 
 const app = express();
 const PORT = 3001;
 const containerId = os.hostname().substring(0, 8);
 
+// ============================================
+// PROMETHEUS METRICS (Built-in)
+// ============================================
+const register = new promClient.Registry();
+const serviceName = 'user_service';
+
+// Collect default metrics
+promClient.collectDefaultMetrics({ register });
+
+// Custom metrics
+const httpRequestsTotal = new promClient.Counter({
+    name: `${serviceName}_http_requests_total`,
+    help: 'Total number of HTTP requests',
+    labelNames: ['method', 'route', 'status_code'],
+    registers: [register]
+});
+
+const httpRequestDuration = new promClient.Histogram({
+    name: `${serviceName}_http_request_duration_seconds`,
+    help: 'Duration of HTTP requests in seconds',
+    labelNames: ['method', 'route', 'status_code'],
+    registers: [register]
+});
+
+const redisOps = new promClient.Counter({
+    name: `${serviceName}_redis_operations_total`,
+    help: 'Total number of Redis operations',
+    labelNames: ['operation'],
+    registers: [register]
+});
+
+const activeUsers = new promClient.Gauge({
+    name: `${serviceName}_active_users_total`,
+    help: 'Total number of active users in memory',
+    registers: [register]
+});
+
+const cacheHits = new promClient.Counter({
+    name: `${serviceName}_cache_hits_total`,
+    help: 'Total number of cache hits',
+    labelNames: ['cache_type'],
+    registers: [register]
+});
+
+const cacheMisses = new promClient.Counter({
+    name: `${serviceName}_cache_misses_total`,
+    help: 'Total number of cache misses',
+    labelNames: ['cache_type'],
+    registers: [register]
+});
+
+// Metrics middleware
+app.use((req, res, next) => {
+    const start = Date.now();
+    
+    res.on('finish', () => {
+        const duration = (Date.now() - start) / 1000;
+        
+        httpRequestsTotal.inc({
+            method: req.method,
+            route: req.route ? req.route.path : req.path,
+            status_code: res.statusCode
+        });
+        
+        httpRequestDuration.observe({
+            method: req.method,
+            route: req.route ? req.route.path : req.path,
+            status_code: res.statusCode
+        }, duration);
+    });
+    
+    next();
+});
+// ============================================
+
+app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} - Request received`);
+    next();
+});
+
 // Connect to Redis
 const redisClient = redis.createClient({
-    url: 'redis://demo_redis:6379'
+    url: 'redis://app_redis:6379'
 });
 
 redisClient.on('error', (err) => console.error('Redis Error:', err));
@@ -27,16 +108,20 @@ const users = [
     { id: 5, name: 'Evan Wright', email: 'evan@example.com' }
 ];
 
+activeUsers.set(users.length);
+
 // Track API calls using Redis
 app.use(async (req, res, next) => {
-    // Increment request counter in Redis
     await redisClient.incr('user_service_requests');
+    redisOps.inc({ operation: 'incr_requests' });
     next();
 });
 
 // Home route
 app.get('/', async (req, res) => {
     const requestCount = await redisClient.get('user_service_requests');
+    redisOps.inc({ operation: 'get_requests' });
+    
     res.json({
         service: 'User Service',
         container: containerId,
@@ -48,9 +133,11 @@ app.get('/', async (req, res) => {
 
 // Get all users
 app.get('/users', async (req, res) => {
-    // Track how many times users are fetched
     await redisClient.incr('user_fetches');
+    redisOps.inc({ operation: 'incr_fetches' });
+    
     const fetchCount = await redisClient.get('user_fetches');
+    redisOps.inc({ operation: 'get_fetches' });
     
     res.json({
         service: 'user-service',
@@ -66,27 +153,29 @@ app.get('/users/:id', async (req, res) => {
     const cacheKey = `user_${userId}`;
     
     try {
-        // Try to get from Redis cache
         const cachedUser = await redisClient.get(cacheKey);
+        redisOps.inc({ operation: 'get_cached_user' });
         
         if (cachedUser) {
+            cacheHits.inc({ cache_type: 'user_detail' });
             console.log(`Returning cached user ${userId}`);
             return res.json({
                 service: 'user-service',
                 container: containerId,
                 from_cache: true,
-                user: JSON.parse(cachedUser)
+                user: JSON.parse(cachedUser) 
             });
         }
         
-        // Find user
+        cacheMisses.inc({ cache_type: 'user_detail' });
+        
         const user = users.find(u => u.id === parseInt(userId));
         if (!user) {
             return res.status(404).json({ error: 'User not found' });
         }
         
-        // Store in Redis cache for 1 minute
         await redisClient.setEx(cacheKey, 60, JSON.stringify(user));
+        redisOps.inc({ operation: 'set_cached_user' });
         
         res.json({
             service: 'user-service',
@@ -109,6 +198,12 @@ app.get('/health', async (req, res) => {
         container: containerId,
         redis: redisStatus
     });
+});
+
+// Metrics endpoint
+app.get('/metrics', async (req, res) => {
+    res.set('Content-Type', register.contentType);
+    res.end(await register.metrics());
 });
 
 app.listen(PORT, () => {
